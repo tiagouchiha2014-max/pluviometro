@@ -68,7 +68,7 @@
 <body>
 <header>
   <h1>🌧️ Controle de Chuva</h1>
-  <p>Registre precipitação em mm, acompanhe totais e receba alertas por limite. Agora com login + sincronização.</p>
+  <p>Registre precipitação em mm, acompanhe totais e receba alertas por limite. Agora com login + sincronização automática.</p>
 </header>
 
 <main>
@@ -80,7 +80,7 @@
       </div>
 
       <!-- ===== LOGIN + SYNC ===== -->
-      <label>Login (para sincronizar entre celulares)</label>
+      <label>Login (para sincronizar entre aparelhos)</label>
       <div class="row">
         <input id="email" type="email" placeholder="seuemail@exemplo.com" />
         <button id="btnLogin" class="ghost">Enviar link</button>
@@ -143,7 +143,7 @@
       </div>
 
       <div class="note" style="margin-top:10px">
-        Offline-first: se não tiver internet, salva no celular e sincroniza quando voltar.
+        Offline-first: se não tiver internet, salva no celular e sincroniza automaticamente quando voltar.
       </div>
       <input id="filePick" type="file" accept="application/json" style="display:none" />
     </div>
@@ -405,9 +405,8 @@
     const user = await getUser();
     if(!user) return false;
 
-    // garante user_id em tudo
     const payload = items.map(it => ({
-      id: it.id,              // o id do cliente (uuid) vira o mesmo no banco
+      id: it.id,
       user_id: user.id,
       ts: it.ts,
       mm: it.mm,
@@ -423,6 +422,7 @@
     return true;
   }
 
+  // ✅ ALTERAÇÃO: filtra por user_id também
   async function deleteFromCloud(ids){
     const user = await getUser();
     if(!user) return false;
@@ -430,7 +430,8 @@
     const { error } = await sb
       .from("rain_readings")
       .delete()
-      .in("id", ids);
+      .in("id", ids)
+      .eq("user_id", user.id);
 
     if(error) throw error;
     return true;
@@ -438,6 +439,8 @@
 
   /***********************
    *  SYNC ENGINE (offline-first)
+   *  + Auto Sync
+   *  + Realtime (quase instantâneo)
    ***********************/
   const elAuthState = document.getElementById("authState");
   const elSyncState = document.getElementById("syncState");
@@ -448,41 +451,51 @@
 
   function queueUpsert(item){
     const q = loadQueue();
-    // evita duplicar o mesmo id na fila
     q.upserts = q.upserts.filter(x => x.id !== item.id);
     q.upserts.push(item);
-    // se estava marcado para deletar, remove do delete
     q.deletes = q.deletes.filter(id => id !== item.id);
     saveQueue(q);
   }
 
   function queueDelete(id){
     const q = loadQueue();
-    // remove de upserts se existir
     q.upserts = q.upserts.filter(x => x.id !== id);
     if(!q.deletes.includes(id)) q.deletes.push(id);
     saveQueue(q);
   }
 
+  let syncing = false;
+
   async function syncNow({pullAfter=true} = {}){
+    if(syncing) return;
+
+    // sem internet → mantém na fila
+    if(!navigator.onLine){
+      setSyncState("Offline. Vou sincronizar quando voltar.");
+      return;
+    }
+
     const user = await getUser();
     if(!user){
       setSyncState("Faça login para sincronizar.");
       return;
     }
 
-    const q = loadQueue();
-    if(!q.upserts.length && !q.deletes.length){
-      setSyncState("Nada pendente.");
-      if(pullAfter){
-        const cloud = await loadFromCloud();
-        if(cloud){ data = cloud; saveData(data); render(); }
-      }
-      return;
-    }
-
+    syncing = true;
     try{
-      setSyncState(`Enviando pendências... (upserts: ${q.upserts.length}, deletes: ${q.deletes.length})`);
+      const q = loadQueue();
+
+      if(!q.upserts.length && !q.deletes.length){
+        setSyncState("Nada pendente. Atualizando da nuvem...");
+        if(pullAfter){
+          const cloud = await loadFromCloud();
+          if(cloud){ data = cloud; saveData(data); render(); }
+        }
+        setSyncState("Sincronizado ✅");
+        return;
+      }
+
+      setSyncState(`Enviando... (upserts: ${q.upserts.length}, deletes: ${q.deletes.length})`);
 
       // 1) deletes
       if(q.deletes.length){
@@ -506,8 +519,53 @@
       setSyncState("Sincronizado ✅");
       render();
     }catch(e){
-      setSyncState("Falhou (offline?). Mantive na fila.");
+      // mantém fila para tentar depois
+      setSyncState("Falhou (offline/erro). Mantive na fila.");
       console.log(e);
+    } finally {
+      syncing = false;
+    }
+  }
+
+  // ✅ AUTO SYNC: agenda para evitar spam
+  let syncTimer = null;
+  function scheduleSync(delayMs = 1200){
+    clearTimeout(syncTimer);
+    syncTimer = setTimeout(() => {
+      syncNow({ pullAfter:true }).catch(()=>{});
+    }, delayMs);
+  }
+
+  // ✅ REALTIME: atualiza quando outro aparelho mudar algo
+  let realtimeSub = null;
+
+  async function startRealtime(){
+    const user = await getUser();
+    if(!user) return;
+    if(realtimeSub) return;
+
+    realtimeSub = sb.channel("rain_readings_changes")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "rain_readings",
+          filter: `user_id=eq.${user.id}`
+        },
+        () => {
+          // mudança detectada (pode ser outro aparelho)
+          setSyncState("Mudança detectada. Atualizando...");
+          scheduleSync(300);
+        }
+      )
+      .subscribe();
+  }
+
+  async function stopRealtime(){
+    if(realtimeSub){
+      try{ await sb.removeChannel(realtimeSub); } catch(e){}
+      realtimeSub = null;
     }
   }
 
@@ -716,7 +774,7 @@
     const { data: { session } } = await sb.auth.getSession();
     if(session?.user){
       elAuthState.textContent = "Logado: " + session.user.email;
-      setSyncState("Pronto para sincronizar.");
+      setSyncState("Pronto. Sync automático ativo.");
     }else{
       elAuthState.textContent = "Deslogado";
       setSyncState("--");
@@ -727,10 +785,13 @@
   sb.auth.onAuthStateChange(async (_event, session)=>{
     if(session?.user){
       elAuthState.textContent = "Logado: " + session.user.email;
-      // tenta sincronizar pendências e depois puxa a nuvem
+
+      // ✅ inicia realtime e sincroniza
+      await startRealtime();
       await syncNow({pullAfter:true});
     }else{
       elAuthState.textContent = "Deslogado";
+      await stopRealtime();
     }
   });
 
@@ -757,10 +818,10 @@
 
     // enfileira para sync
     queueUpsert(item);
-    setSyncState("Pendente (salvo offline).");
+    setSyncState("Pendente (salvo local). Sync automático...");
 
-    // tenta sync imediata se estiver logado
-    await syncNow({pullAfter:true});
+    // ✅ AUTO: agenda (evita múltiplas chamadas)
+    scheduleSync(800);
 
     // reset campos
     elMm.value = "";
@@ -811,10 +872,12 @@
     saveData(data);
     render();
 
-    // enfileira delete + tenta sync
+    // enfileira delete + auto sync
     queueDelete(id);
-    setSyncState("Exclusão pendente (offline).");
-    await syncNow({pullAfter:true});
+    setSyncState("Exclusão pendente. Sync automático...");
+
+    // ✅ AUTO
+    scheduleSync(800);
   });
 
   // export CSV (local data atual)
@@ -861,7 +924,6 @@
       saveData(data);
       saveCfg(cfg);
 
-      // restaura fila se existir (opcional)
       if(obj.queue && typeof obj.queue === "object"){
         saveQueue({
           upserts: Array.isArray(obj.queue.upserts) ? obj.queue.upserts : [],
@@ -874,15 +936,17 @@
 
       render();
       alert("Importado com sucesso!");
+      // ✅ AUTO: tenta subir o que importou
+      scheduleSync(800);
     }catch(err){
       alert("Falha ao importar: " + err.message);
     }
   });
 
-  // wipe (local + fila; nuvem só se logado e você sincronizar depois)
+  // wipe (local + fila; nuvem só quando sync rodar)
   document.getElementById("btnWipe").addEventListener("click", ()=>{
     if(!confirm("Apagar TODOS os registros locais?")) return;
-    // marca deletes para tudo que existe localmente (para deletar na nuvem depois)
+
     const ids = data.map(x=>x.id);
     const q = loadQueue();
     ids.forEach(id=>{
@@ -894,7 +958,8 @@
     data = [];
     saveData(data);
     render();
-    setSyncState("Tudo apagado local. Faça Sync para refletir na nuvem.");
+    setSyncState("Tudo apagado local. Sync automático vai refletir na nuvem quando possível.");
+    scheduleSync(900);
   });
 
   // demo data
@@ -918,17 +983,39 @@
     data = demo;
     saveData(data);
 
-    // marca tudo para subir
     const q = loadQueue();
     demo.forEach(it=>{
       q.upserts = q.upserts.filter(x => x.id !== it.id);
       q.upserts.push(it);
     });
     saveQueue(q);
-    setSyncState("Dados de teste pendentes. Clique Sync.");
 
+    setSyncState("Dados de teste pendentes. Sync automático...");
     render();
+    scheduleSync(900);
   });
+
+  /***********************
+   *  AUTO SYNC TRIGGERS
+   ***********************/
+  // ✅ quando internet voltar
+  window.addEventListener("online", () => {
+    setSyncState("Internet voltou. Sync automático...");
+    scheduleSync(500);
+  });
+
+  // ✅ quando voltar para o app/aba
+  document.addEventListener("visibilitychange", () => {
+    if(!document.hidden && navigator.onLine){
+      setSyncState("Voltando ao app. Atualizando...");
+      scheduleSync(200);
+    }
+  });
+
+  // ✅ a cada 2 minutos (seguro e simples)
+  setInterval(() => {
+    if(navigator.onLine) scheduleSync(0);
+  }, 2 * 60 * 1000);
 
   /***********************
    *  INIT
@@ -939,6 +1026,15 @@
 
   refreshAuthUI().then(()=>{});
   render();
+
+  // ✅ se já estiver logado ao abrir, inicia realtime e faz sync
+  (async () => {
+    const { data: { session } } = await sb.auth.getSession();
+    if(session?.user){
+      await startRealtime();
+      scheduleSync(300);
+    }
+  })();
 </script>
 </body>
 </html>
