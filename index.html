@@ -1,0 +1,944 @@
+<meta name='viewport' content='width=device-width, initial-scale=1'/><!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Controle de Chuva</title>
+  <style>
+    :root { --bg:#0b1220; --card:#111b33; --txt:#e8eefc; --muted:#b7c3e6; --ok:#3ddc97; --warn:#ffcc66; --bad:#ff6b6b; --b:#223159; }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial;background:linear-gradient(180deg,#071022,#0b1220);color:var(--txt)}
+    header{padding:20px 16px 10px;max-width:1100px;margin:0 auto}
+    h1{margin:0 0 6px;font-size:22px}
+    p{margin:0;color:var(--muted);font-size:13px}
+    main{max-width:1100px;margin:0 auto;padding:12px 16px 30px;display:grid;gap:12px}
+    .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:12px}
+    .card{background:rgba(17,27,51,.9);border:1px solid var(--b);border-radius:16px;padding:14px;box-shadow:0 8px 24px rgba(0,0,0,.25)}
+    .span6{grid-column:span 6}
+    .span4{grid-column:span 4}
+    .span8{grid-column:span 8}
+    .span12{grid-column:span 12}
+    @media (max-width:900px){ .span6,.span4,.span8{grid-column:span 12} }
+    label{display:block;font-size:12px;color:var(--muted);margin:10px 0 6px}
+    input,select,button,textarea{
+      width:100%;padding:10px 12px;border-radius:12px;border:1px solid var(--b);
+      background:#0c1530;color:var(--txt);outline:none
+    }
+    input:focus,select:focus,textarea:focus{border-color:#3b63ff}
+    .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+    @media (max-width:520px){ .row,.row3{grid-template-columns:1fr} }
+    .btns{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+    button{cursor:pointer}
+    .primary{background:#2f5bff;border-color:#2f5bff}
+    .ghost{background:transparent}
+    .danger{background:#ff4d4d;border-color:#ff4d4d}
+    .kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+    @media (max-width:520px){ .kpis{grid-template-columns:1fr} }
+    .kpi{padding:12px;border-radius:14px;border:1px solid var(--b);background:#0c1530}
+    .kpi .v{font-size:22px;font-weight:700;margin-top:4px}
+    .tag{display:inline-block;padding:4px 10px;border-radius:999px;font-size:12px;border:1px solid var(--b);color:var(--muted)}
+    .tag.ok{color:#052014;background:var(--ok);border-color:var(--ok)}
+    .tag.warn{color:#2a1a00;background:var(--warn);border-color:var(--warn)}
+    .tag.bad{color:#2a0000;background:var(--bad);border-color:var(--bad)}
+    table{width:100%;border-collapse:collapse;margin-top:10px}
+    th,td{padding:10px 8px;border-bottom:1px solid var(--b);font-size:13px;text-align:left}
+    th{color:var(--muted);font-weight:600}
+    .small{font-size:12px;color:var(--muted)}
+    canvas{width:100%;height:220px;border-radius:14px;border:1px solid var(--b);background:#0c1530}
+    .note{font-size:12px;color:var(--muted);line-height:1.4}
+    .flex{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+
+    /* ====== PDF/PRINT ====== */
+    .print-only{display:none}
+    @media print{
+      body{background:#fff !important;color:#000 !important}
+      .card{background:#fff !important; box-shadow:none !important; border:1px solid #ccc !important}
+      .tag{border-color:#ccc !important}
+      button, input, select, textarea, .btns, .note, #filePick { display:none !important; }
+      canvas{display:none !important}
+      .print-only{display:block !important}
+      #chartImg{width:100% !important; height:auto !important; border:1px solid #ccc !important; border-radius:10px !important}
+      th, td{border-bottom:1px solid #ddd !important; color:#000 !important}
+      th{color:#333 !important}
+      tr{page-break-inside:avoid}
+    }
+  </style>
+</head>
+<body>
+<header>
+  <h1>🌧️ Controle de Chuva</h1>
+  <p>Registre precipitação em mm, acompanhe totais e receba alertas por limite. Agora com login + sincronização.</p>
+</header>
+
+<main>
+  <section class="grid">
+    <div class="card span6">
+      <div class="flex">
+        <span class="tag" id="statusTag">Sem alerta</span>
+        <span class="small" id="lastSave">--</span>
+      </div>
+
+      <!-- ===== LOGIN + SYNC ===== -->
+      <label>Login (para sincronizar entre celulares)</label>
+      <div class="row">
+        <input id="email" type="email" placeholder="seuemail@exemplo.com" />
+        <button id="btnLogin" class="ghost">Enviar link</button>
+      </div>
+      <div class="btns">
+        <button id="btnLogout" class="ghost">Sair</button>
+        <button id="btnSync" class="ghost">Sincronizar agora</button>
+      </div>
+      <div class="small" id="authState">Deslogado</div>
+      <div class="small" id="syncState">Sync: --</div>
+
+      <hr style="border:0;border-top:1px solid var(--b);margin:14px 0">
+
+      <label>Data e hora</label>
+      <input id="dt" type="datetime-local" />
+
+      <div class="row">
+        <div>
+          <label>Chuva (mm)</label>
+          <input id="mm" type="number" step="0.1" min="0" placeholder="Ex: 12.5" />
+        </div>
+        <div>
+          <label>Local / Estação</label>
+          <input id="station" type="text" placeholder="Ex: Pluviômetro Quintal" />
+        </div>
+      </div>
+
+      <label>Observação</label>
+      <textarea id="obs" rows="2" placeholder="Ex: chuva forte 20min"></textarea>
+
+      <div class="btns">
+        <button class="primary" id="btnAdd">Salvar registro</button>
+        <button class="ghost" id="btnClearForm">Limpar</button>
+      </div>
+
+      <hr style="border:0;border-top:1px solid var(--b);margin:14px 0">
+
+      <div class="row3">
+        <div>
+          <label>Limite alerta diário (mm)</label>
+          <input id="limitDaily" type="number" step="0.1" min="0" />
+        </div>
+        <div>
+          <label>Limite alerta por hora (mm)</label>
+          <input id="limitHour" type="number" step="0.1" min="0" />
+        </div>
+        <div>
+          <label>Notificações</label>
+          <button id="btnNotify" class="ghost">Ativar</button>
+          <div class="small" id="notifyState">Desativado</div>
+        </div>
+      </div>
+
+      <div class="btns">
+        <button id="btnExport" class="ghost">Exportar CSV</button>
+        <button id="btnPdf" class="ghost">Salvar PDF</button>
+        <button id="btnImport" class="ghost">Importar JSON</button>
+        <button id="btnBackup" class="ghost">Baixar backup (JSON)</button>
+        <button id="btnWipe" class="danger">Apagar tudo</button>
+      </div>
+
+      <div class="note" style="margin-top:10px">
+        Offline-first: se não tiver internet, salva no celular e sincroniza quando voltar.
+      </div>
+      <input id="filePick" type="file" accept="application/json" style="display:none" />
+    </div>
+
+    <div class="card span6">
+      <div class="kpis">
+        <div class="kpi">
+          <div class="small">Total hoje</div>
+          <div class="v" id="kpiToday">0.0 mm</div>
+        </div>
+        <div class="kpi">
+          <div class="small">Última 1 hora</div>
+          <div class="v" id="kpiHour">0.0 mm</div>
+        </div>
+        <div class="kpi">
+          <div class="small">Total mês</div>
+          <div class="v" id="kpiMonth">0.0 mm</div>
+        </div>
+      </div>
+
+      <label>Filtro rápido</label>
+      <div class="row">
+        <select id="filterRange">
+          <option value="7">Últimos 7 dias</option>
+          <option value="14">Últimos 14 dias</option>
+          <option value="30" selected>Últimos 30 dias</option>
+          <option value="90">Últimos 90 dias</option>
+          <option value="all">Tudo</option>
+        </select>
+        <input id="search" placeholder="Buscar por local/observação..." />
+      </div>
+
+      <label>Gráfico (mm por dia)</label>
+      <canvas id="chart" width="900" height="300"></canvas>
+      <img id="chartImg" class="print-only" alt="Gráfico de chuva (mm por dia)" />
+      <div class="small">Cada barra = soma do dia no período selecionado.</div>
+    </div>
+
+    <div class="card span12">
+      <div class="flex" style="justify-content:space-between">
+        <div>
+          <strong>Histórico</strong>
+          <div class="small" id="countInfo">0 registros</div>
+        </div>
+        <div class="flex">
+          <button class="ghost" id="btnDemo">Gerar dados de teste</button>
+          <button class="ghost" id="btnSort">Ordenar: mais recentes</button>
+        </div>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Data/hora</th>
+            <th>mm</th>
+            <th>Local</th>
+            <th>Obs.</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<!-- Supabase JS (CDN) -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+<script>
+  /***********************
+   *  SUPABASE CONFIG
+   ***********************/
+  const SUPABASE_URL = "https://nplvnisfdhdcxynxpwll.supabase.co";
+  const SUPABASE_ANON_KEY = "sb_publishable_Gp4M0oxslUtmjtSC5i3gCQ_nILxwnqs";
+  const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  /***********************
+   *  STORAGE (LOCAL)
+   ***********************/
+  const KEY = "rain_control_v2";
+  const KEY_CFG = "rain_control_cfg_v2";
+  const KEY_QUEUE = "rain_control_queue_v2"; // fila de sync
+
+  function loadData(){
+    try { return JSON.parse(localStorage.getItem(KEY)) ?? []; }
+    catch { return []; }
+  }
+  function saveData(arr){
+    localStorage.setItem(KEY, JSON.stringify(arr));
+    document.getElementById("lastSave").textContent = "Salvo: " + new Date().toLocaleString();
+  }
+
+  function loadCfg(){
+    try {
+      return JSON.parse(localStorage.getItem(KEY_CFG)) ?? {
+        limitDaily: 50,
+        limitHour: 20,
+        sort: "desc"
+      };
+    } catch {
+      return { limitDaily: 50, limitHour: 20, sort: "desc" };
+    }
+  }
+  function saveCfg(cfg){
+    localStorage.setItem(KEY_CFG, JSON.stringify(cfg));
+  }
+
+  function loadQueue(){
+    try {
+      return JSON.parse(localStorage.getItem(KEY_QUEUE)) ?? { upserts: [], deletes: [] };
+    } catch {
+      return { upserts: [], deletes: [] };
+    }
+  }
+  function saveQueue(q){
+    localStorage.setItem(KEY_QUEUE, JSON.stringify(q));
+  }
+
+  /***********************
+   *  UTILS
+   ***********************/
+  const pad2 = n => String(n).padStart(2,"0");
+  function toLocalInputValue(d){
+    return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  }
+  function parseLocalInput(v){
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  function sameDay(a,b){
+    return a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate();
+  }
+  function ymd(d){
+    return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
+  }
+  function sum(arr){ return arr.reduce((s,x)=>s+x,0); }
+  function downloadText(filename, text){
+    const blob = new Blob([text], {type:"text/plain;charset=utf-8"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href=url; a.download=filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }
+  function escapeHtml(s){
+    return (s+"")
+      .replaceAll("&","&amp;")
+      .replaceAll("<","&lt;")
+      .replaceAll(">","&gt;")
+      .replaceAll('"',"&quot;")
+      .replaceAll("'","&#039;");
+  }
+
+  /***********************
+   *  CHART
+   ***********************/
+  const canvas = document.getElementById("chart");
+  const ctx = canvas.getContext("2d");
+
+  function drawChart(dailyPairs){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+
+    const W = canvas.width, H = canvas.height;
+    const pad = 28;
+    const baseY = H - pad;
+    const baseX = pad;
+
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = "#223159";
+    ctx.beginPath();
+    ctx.moveTo(baseX, pad);
+    ctx.lineTo(baseX, baseY);
+    ctx.lineTo(W-pad, baseY);
+    ctx.stroke();
+
+    if(!dailyPairs.length){
+      ctx.fillStyle="#b7c3e6";
+      ctx.font="14px system-ui";
+      ctx.fillText("Sem dados no período.", baseX+12, pad+18);
+      return;
+    }
+
+    const max = Math.max(...dailyPairs.map(x=>x.mm), 5);
+    const barW = Math.max(6, Math.floor((W - pad*2) / dailyPairs.length) - 2);
+
+    ctx.fillStyle="#b7c3e6";
+    ctx.font="12px system-ui";
+    for(let i=0;i<=4;i++){
+      const v = (max/4)*i;
+      const y = baseY - ( (baseY-pad) * (v/max) );
+      ctx.globalAlpha = 0.35;
+      ctx.beginPath();
+      ctx.moveTo(baseX, y);
+      ctx.lineTo(W-pad, y);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.fillText(v.toFixed(0)+"mm", 4, y+4);
+    }
+
+    dailyPairs.forEach((p, i)=>{
+      const h = ((baseY-pad) * (p.mm/max));
+      const x = baseX + 2 + i*(barW+2);
+      const y = baseY - h;
+
+      ctx.globalAlpha = 0.9;
+      ctx.fillStyle = "#2f5bff";
+      ctx.fillRect(x, y, barW, h);
+
+      if(dailyPairs.length <= 14 || i % Math.ceil(dailyPairs.length/10) === 0){
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = "#b7c3e6";
+        ctx.font="11px system-ui";
+        ctx.save();
+        ctx.translate(x+barW/2, baseY+14);
+        ctx.rotate(-Math.PI/6);
+        ctx.textAlign="center";
+        ctx.fillText(p.day.slice(5), 0, 0);
+        ctx.restore();
+      }
+    });
+
+    ctx.globalAlpha = 1;
+  }
+
+  /***********************
+   *  SUPABASE (CLOUD)
+   *  Tabela: rain_readings
+   *  colunas: id (uuid pk), user_id (uuid), ts (bigint), mm (numeric), station (text), obs (text)
+   ***********************/
+  async function getUser(){
+    const { data, error } = await sb.auth.getUser();
+    if(error) return null;
+    return data?.user ?? null;
+  }
+
+  async function loadFromCloud(){
+    const user = await getUser();
+    if(!user) return null;
+
+    const { data, error } = await sb
+      .from("rain_readings")
+      .select("id, ts, mm, station, obs")
+      .order("ts", { ascending:false });
+
+    if(error) throw error;
+
+    return (data || []).map(x => ({
+      id: x.id,
+      ts: Number(x.ts),
+      mm: Number(x.mm),
+      station: x.station || "",
+      obs: x.obs || ""
+    }));
+  }
+
+  async function upsertToCloud(items){
+    const user = await getUser();
+    if(!user) return false;
+
+    // garante user_id em tudo
+    const payload = items.map(it => ({
+      id: it.id,              // o id do cliente (uuid) vira o mesmo no banco
+      user_id: user.id,
+      ts: it.ts,
+      mm: it.mm,
+      station: it.station || "",
+      obs: it.obs || ""
+    }));
+
+    const { error } = await sb
+      .from("rain_readings")
+      .upsert(payload, { onConflict: "id" });
+
+    if(error) throw error;
+    return true;
+  }
+
+  async function deleteFromCloud(ids){
+    const user = await getUser();
+    if(!user) return false;
+
+    const { error } = await sb
+      .from("rain_readings")
+      .delete()
+      .in("id", ids);
+
+    if(error) throw error;
+    return true;
+  }
+
+  /***********************
+   *  SYNC ENGINE (offline-first)
+   ***********************/
+  const elAuthState = document.getElementById("authState");
+  const elSyncState = document.getElementById("syncState");
+
+  function setSyncState(msg){
+    elSyncState.textContent = "Sync: " + msg;
+  }
+
+  function queueUpsert(item){
+    const q = loadQueue();
+    // evita duplicar o mesmo id na fila
+    q.upserts = q.upserts.filter(x => x.id !== item.id);
+    q.upserts.push(item);
+    // se estava marcado para deletar, remove do delete
+    q.deletes = q.deletes.filter(id => id !== item.id);
+    saveQueue(q);
+  }
+
+  function queueDelete(id){
+    const q = loadQueue();
+    // remove de upserts se existir
+    q.upserts = q.upserts.filter(x => x.id !== id);
+    if(!q.deletes.includes(id)) q.deletes.push(id);
+    saveQueue(q);
+  }
+
+  async function syncNow({pullAfter=true} = {}){
+    const user = await getUser();
+    if(!user){
+      setSyncState("Faça login para sincronizar.");
+      return;
+    }
+
+    const q = loadQueue();
+    if(!q.upserts.length && !q.deletes.length){
+      setSyncState("Nada pendente.");
+      if(pullAfter){
+        const cloud = await loadFromCloud();
+        if(cloud){ data = cloud; saveData(data); render(); }
+      }
+      return;
+    }
+
+    try{
+      setSyncState(`Enviando pendências... (upserts: ${q.upserts.length}, deletes: ${q.deletes.length})`);
+
+      // 1) deletes
+      if(q.deletes.length){
+        await deleteFromCloud(q.deletes);
+      }
+
+      // 2) upserts
+      if(q.upserts.length){
+        await upsertToCloud(q.upserts);
+      }
+
+      // limpa fila
+      saveQueue({ upserts: [], deletes: [] });
+
+      // puxa estado oficial
+      if(pullAfter){
+        const cloud = await loadFromCloud();
+        if(cloud){ data = cloud; saveData(data); }
+      }
+
+      setSyncState("Sincronizado ✅");
+      render();
+    }catch(e){
+      setSyncState("Falhou (offline?). Mantive na fila.");
+      console.log(e);
+    }
+  }
+
+  /***********************
+   *  APP STATE
+   ***********************/
+  let data = loadData();
+  let cfg = loadCfg();
+
+  const elDt = document.getElementById("dt");
+  const elMm = document.getElementById("mm");
+  const elStation = document.getElementById("station");
+  const elObs = document.getElementById("obs");
+  const elTbody = document.getElementById("tbody");
+  const elCountInfo = document.getElementById("countInfo");
+  const elRange = document.getElementById("filterRange");
+  const elSearch = document.getElementById("search");
+  const elKpiToday = document.getElementById("kpiToday");
+  const elKpiHour = document.getElementById("kpiHour");
+  const elKpiMonth = document.getElementById("kpiMonth");
+  const elTag = document.getElementById("statusTag");
+  const elLimitDaily = document.getElementById("limitDaily");
+  const elLimitHour = document.getElementById("limitHour");
+  const elNotifyBtn = document.getElementById("btnNotify");
+  const elNotifyState = document.getElementById("notifyState");
+  const filePick = document.getElementById("filePick");
+
+  elDt.value = toLocalInputValue(new Date());
+  elLimitDaily.value = cfg.limitDaily;
+  elLimitHour.value = cfg.limitHour;
+
+  function getFiltered(){
+    const q = (elSearch.value || "").toLowerCase().trim();
+    const range = elRange.value;
+
+    let arr = [...data];
+
+    arr.sort((a,b)=> cfg.sort === "desc" ? (b.ts - a.ts) : (a.ts - b.ts));
+
+    if(range !== "all"){
+      const days = Number(range);
+      const since = Date.now() - days*24*3600*1000;
+      arr = arr.filter(x => x.ts >= since);
+    }
+
+    if(q){
+      arr = arr.filter(x =>
+        (x.station||"").toLowerCase().includes(q) ||
+        (x.obs||"").toLowerCase().includes(q)
+      );
+    }
+
+    return arr;
+  }
+
+  function computeKPIs(){
+    const now = new Date();
+    const todaySum = sum(data
+      .filter(x => sameDay(new Date(x.ts), now))
+      .map(x => Number(x.mm)||0));
+
+    const hourAgo = Date.now() - 3600*1000;
+    const hourSum = sum(data
+      .filter(x => x.ts >= hourAgo)
+      .map(x => Number(x.mm)||0));
+
+    const monthSum = sum(data
+      .filter(x => {
+        const d = new Date(x.ts);
+        return d.getFullYear()===now.getFullYear() && d.getMonth()===now.getMonth();
+      })
+      .map(x => Number(x.mm)||0));
+
+    elKpiToday.textContent = todaySum.toFixed(1) + " mm";
+    elKpiHour.textContent = hourSum.toFixed(1) + " mm";
+    elKpiMonth.textContent = monthSum.toFixed(1) + " mm";
+
+    const daily = Number(cfg.limitDaily)||0;
+    const hourly = Number(cfg.limitHour)||0;
+
+    let level = "ok";
+    let text = "OK";
+
+    if(daily>0 && todaySum >= daily){ level="bad"; text="Alerta diário"; }
+    else if(hourly>0 && hourSum >= hourly){ level="warn"; text="Alerta 1h"; }
+    else { level="ok"; text="Sem alerta"; }
+
+    elTag.className = "tag " + level;
+    elTag.textContent = text;
+
+    return {todaySum, hourSum, monthSum, level, text};
+  }
+
+  function computeDailyBars(filtered){
+    const map = new Map();
+    filtered.forEach(x=>{
+      const d = new Date(x.ts);
+      const key = ymd(d);
+      map.set(key, (map.get(key)||0) + (Number(x.mm)||0));
+    });
+    const pairs = [...map.entries()]
+      .sort((a,b)=> a[0].localeCompare(b[0]))
+      .map(([day,mm])=>({day,mm}));
+    return pairs;
+  }
+
+  function render(){
+    const filtered = getFiltered();
+    elCountInfo.textContent = `${filtered.length} registro(s) mostrado(s) • ${data.length} total`;
+
+    elTbody.innerHTML = "";
+    filtered.forEach(item=>{
+      const tr = document.createElement("tr");
+      const d = new Date(item.ts);
+
+      tr.innerHTML = `
+        <td>${d.toLocaleString()}</td>
+        <td><strong>${Number(item.mm).toFixed(1)}</strong></td>
+        <td>${escapeHtml(item.station||"--")}</td>
+        <td>${escapeHtml(item.obs||"")}</td>
+        <td><button class="ghost" data-del="${item.id}">Excluir</button></td>
+      `;
+      elTbody.appendChild(tr);
+    });
+
+    const bars = computeDailyBars(filtered);
+    drawChart(bars);
+
+    const k = computeKPIs();
+    maybeNotify(k);
+  }
+
+  /***********************
+   *  NOTIFICATIONS
+   ***********************/
+  let notifiedKey = "";
+  async function enableNotify(){
+    if(!("Notification" in window)){
+      elNotifyState.textContent = "Não suportado neste navegador";
+      return;
+    }
+    const perm = await Notification.requestPermission();
+    elNotifyState.textContent = (perm === "granted") ? "Ativado" : "Bloqueado";
+  }
+  function maybeNotify(k){
+    if(!("Notification" in window)) return;
+    if(Notification.permission !== "granted") return;
+
+    const today = ymd(new Date());
+    const key = `${today}:${k.level}:${cfg.limitDaily}:${cfg.limitHour}`;
+
+    if(k.level === "ok") { notifiedKey = ""; return; }
+    if(key === notifiedKey) return;
+
+    const msg = (k.level === "bad")
+      ? `A chuva de hoje chegou a ${document.getElementById("kpiToday").textContent} (limite ${cfg.limitDaily}mm).`
+      : `Na última 1 hora: ${document.getElementById("kpiHour").textContent} (limite ${cfg.limitHour}mm).`;
+
+    new Notification("Controle de Chuva", { body: msg });
+    notifiedKey = key;
+  }
+
+  /***********************
+   *  PDF
+   ***********************/
+  function saveAsPDF(){
+    const img = document.getElementById("chartImg");
+    try{ img.src = canvas.toDataURL("image/png"); } catch(e){}
+    const oldTitle = document.title;
+    document.title = "controle-de-chuva-" + ymd(new Date());
+    window.print();
+    document.title = oldTitle;
+  }
+  document.getElementById("btnPdf").addEventListener("click", saveAsPDF);
+
+  /***********************
+   *  LOGIN (MAGIC LINK)
+   ***********************/
+  document.getElementById("btnLogin").addEventListener("click", async ()=>{
+    const email = document.getElementById("email").value.trim();
+    if(!email) return alert("Informe seu email.");
+
+    try{
+      const redirectTo = window.location.origin + window.location.pathname;
+      const { error } = await sb.auth.signInWithOtp({
+        email,
+        options: { emailRedirectTo: redirectTo }
+      });
+      if(error) throw error;
+
+      alert("Enviei um link de login para seu email. Abra no celular e confirme.");
+    }catch(e){
+      alert("Falha ao enviar link: " + (e?.message || e));
+    }
+  });
+
+  document.getElementById("btnLogout").addEventListener("click", async ()=>{
+    await sb.auth.signOut();
+  });
+
+  document.getElementById("btnSync").addEventListener("click", async ()=>{
+    await syncNow({pullAfter:true});
+  });
+
+  async function refreshAuthUI(){
+    const { data: { session } } = await sb.auth.getSession();
+    if(session?.user){
+      elAuthState.textContent = "Logado: " + session.user.email;
+      setSyncState("Pronto para sincronizar.");
+    }else{
+      elAuthState.textContent = "Deslogado";
+      setSyncState("--");
+    }
+  }
+
+  // quando logar/voltar de redirect do email
+  sb.auth.onAuthStateChange(async (_event, session)=>{
+    if(session?.user){
+      elAuthState.textContent = "Logado: " + session.user.email;
+      // tenta sincronizar pendências e depois puxa a nuvem
+      await syncNow({pullAfter:true});
+    }else{
+      elAuthState.textContent = "Deslogado";
+    }
+  });
+
+  /***********************
+   *  ACTIONS
+   ***********************/
+  document.getElementById("btnAdd").addEventListener("click", async ()=>{
+    const d = parseLocalInput(elDt.value);
+    const mm = Number(elMm.value);
+    if(!d){ alert("Data/hora inválida."); return; }
+    if(!(mm >= 0)){ alert("Informe mm (número >= 0)."); return; }
+
+    const item = {
+      id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2),
+      ts: d.getTime(),
+      mm: Number(mm.toFixed(1)),
+      station: (elStation.value||"").trim(),
+      obs: (elObs.value||"").trim()
+    };
+
+    // salva local primeiro
+    data.push(item);
+    saveData(data);
+
+    // enfileira para sync
+    queueUpsert(item);
+    setSyncState("Pendente (salvo offline).");
+
+    // tenta sync imediata se estiver logado
+    await syncNow({pullAfter:true});
+
+    // reset campos
+    elMm.value = "";
+    elObs.value = "";
+    elDt.value = toLocalInputValue(new Date());
+
+    render();
+  });
+
+  document.getElementById("btnClearForm").addEventListener("click", ()=>{
+    elMm.value = "";
+    elObs.value = "";
+    elStation.value = "";
+    elDt.value = toLocalInputValue(new Date());
+  });
+
+  document.getElementById("btnSort").addEventListener("click", ()=>{
+    cfg.sort = (cfg.sort === "desc") ? "asc" : "desc";
+    saveCfg(cfg);
+    document.getElementById("btnSort").textContent = "Ordenar: " + (cfg.sort === "desc" ? "mais recentes" : "mais antigos");
+    render();
+  });
+
+  elRange.addEventListener("change", render);
+  elSearch.addEventListener("input", render);
+
+  elLimitDaily.addEventListener("input", ()=>{
+    cfg.limitDaily = Number(elLimitDaily.value)||0;
+    saveCfg(cfg);
+    render();
+  });
+  elLimitHour.addEventListener("input", ()=>{
+    cfg.limitHour = Number(elLimitHour.value)||0;
+    saveCfg(cfg);
+    render();
+  });
+
+  elNotifyBtn.addEventListener("click", enableNotify);
+
+  // delete row
+  elTbody.addEventListener("click", async (e)=>{
+    const btn = e.target.closest("button[data-del]");
+    if(!btn) return;
+    const id = btn.getAttribute("data-del");
+
+    // remove local
+    data = data.filter(x=>x.id !== id);
+    saveData(data);
+    render();
+
+    // enfileira delete + tenta sync
+    queueDelete(id);
+    setSyncState("Exclusão pendente (offline).");
+    await syncNow({pullAfter:true});
+  });
+
+  // export CSV (local data atual)
+  document.getElementById("btnExport").addEventListener("click", ()=>{
+    const rows = [["datetime","mm","station","obs"]];
+    data
+      .slice()
+      .sort((a,b)=>a.ts-b.ts)
+      .forEach(x=>{
+        rows.push([new Date(x.ts).toISOString(), x.mm, x.station||"", x.obs||""]);
+      });
+    const csv = rows.map(r=>r.map(v=>`"${String(v).replaceAll('"','""')}"`).join(",")).join("\n");
+    downloadText("chuva.csv", csv);
+  });
+
+  // backup JSON (inclui fila)
+  document.getElementById("btnBackup").addEventListener("click", ()=>{
+    const backup = {
+      version:2,
+      exportedAt: new Date().toISOString(),
+      cfg,
+      data,
+      queue: loadQueue()
+    };
+    downloadText("backup-chuva.json", JSON.stringify(backup, null, 2));
+  });
+
+  // import JSON
+  document.getElementById("btnImport").addEventListener("click", ()=>{
+    filePick.value = "";
+    filePick.click();
+  });
+  filePick.addEventListener("change", async ()=>{
+    const file = filePick.files?.[0];
+    if(!file) return;
+    try{
+      const text = await file.text();
+      const obj = JSON.parse(text);
+      if(!obj || !Array.isArray(obj.data)) throw new Error("Formato inválido");
+
+      data = obj.data;
+      cfg = obj.cfg || cfg;
+
+      saveData(data);
+      saveCfg(cfg);
+
+      // restaura fila se existir (opcional)
+      if(obj.queue && typeof obj.queue === "object"){
+        saveQueue({
+          upserts: Array.isArray(obj.queue.upserts) ? obj.queue.upserts : [],
+          deletes: Array.isArray(obj.queue.deletes) ? obj.queue.deletes : []
+        });
+      }
+
+      elLimitDaily.value = cfg.limitDaily ?? elLimitDaily.value;
+      elLimitHour.value = cfg.limitHour ?? elLimitHour.value;
+
+      render();
+      alert("Importado com sucesso!");
+    }catch(err){
+      alert("Falha ao importar: " + err.message);
+    }
+  });
+
+  // wipe (local + fila; nuvem só se logado e você sincronizar depois)
+  document.getElementById("btnWipe").addEventListener("click", ()=>{
+    if(!confirm("Apagar TODOS os registros locais?")) return;
+    // marca deletes para tudo que existe localmente (para deletar na nuvem depois)
+    const ids = data.map(x=>x.id);
+    const q = loadQueue();
+    ids.forEach(id=>{
+      q.upserts = q.upserts.filter(x=>x.id !== id);
+      if(!q.deletes.includes(id)) q.deletes.push(id);
+    });
+    saveQueue(q);
+
+    data = [];
+    saveData(data);
+    render();
+    setSyncState("Tudo apagado local. Faça Sync para refletir na nuvem.");
+  });
+
+  // demo data
+  document.getElementById("btnDemo").addEventListener("click", ()=>{
+    if(!confirm("Gerar dados de teste (substitui o histórico local atual)?")) return;
+    const now = Date.now();
+    const mk = (daysAgo, hour, mm) => ({
+      id: crypto.randomUUID ? crypto.randomUUID() : String(now) + Math.random().toString(16).slice(2),
+      ts: now - daysAgo*24*3600*1000 + hour*3600*1000,
+      mm,
+      station: "Pluviômetro",
+      obs: mm>15 ? "chuva forte" : ""
+    });
+    const demo = [];
+    for(let d=0; d<30; d++){
+      const n = Math.random() < 0.35 ? 0 : (Math.random()<0.5 ? 1 : 2);
+      for(let i=0;i<n;i++){
+        demo.push(mk(d, 6 + Math.floor(Math.random()*12), Number((Math.random()*25).toFixed(1))));
+      }
+    }
+    data = demo;
+    saveData(data);
+
+    // marca tudo para subir
+    const q = loadQueue();
+    demo.forEach(it=>{
+      q.upserts = q.upserts.filter(x => x.id !== it.id);
+      q.upserts.push(it);
+    });
+    saveQueue(q);
+    setSyncState("Dados de teste pendentes. Clique Sync.");
+
+    render();
+  });
+
+  /***********************
+   *  INIT
+   ***********************/
+  document.getElementById("btnSort").textContent = "Ordenar: " + (cfg.sort === "desc" ? "mais recentes" : "mais antigos");
+  document.getElementById("notifyState").textContent =
+    ("Notification" in window) ? (Notification.permission === "granted" ? "Ativado" : "Desativado") : "Não suportado";
+
+  refreshAuthUI().then(()=>{});
+  render();
+</script>
+</body>
+</html>
